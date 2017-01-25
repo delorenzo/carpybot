@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/matrix-org/gomatrix"
+	"github.com/texttheater/golang-levenshtein/levenshtein"
 )
 
 type Question struct {
@@ -44,9 +46,20 @@ func parseQuestion(line string) Question {
 	return Question{Question: parts[0], Score: score, Answers: parts[1:]}
 }
 
+var levenshteinOptions levenshtein.Options = levenshtein.Options{
+	InsCost: 1,
+	DelCost: 1,
+	SubCost: 1,
+	Matches: levenshtein.DefaultOptions.Matches,
+}
+
 func stringInSlice(a string, list []string) bool {
+	guess := []rune(strings.ToLower(a))
 	for _, b := range list {
-		if strings.ToLower(b) == strings.ToLower(a) {
+		correct := []rune(strings.ToLower(b))
+		num_runes := len(correct)
+		max_distance := num_runes / 8
+		if levenshtein.DistanceForStrings(guess, correct, levenshteinOptions) <= max_distance {
 			return true
 		}
 	}
@@ -60,14 +73,8 @@ func (tp *TriviaPlugin) Register(client *gomatrix.Client) {
 }
 
 func (tp *TriviaPlugin) OnMessage(ev *gomatrix.Event) {
-	if ev.Content["body"] == "!trivia" {
-		if tp.ActiveQuestion == nil {
-			tp.NewQuestion(ev.RoomID)
-			log.WithFields(log.Fields{
-				"answer": tp.ActiveQuestion.Answers[0],
-				"hint":   tp.HintActiveQuestion(0.25),
-			}).Info("Testing hints")
-		}
+	if ev.Content["body"] == "!trivia" && tp.ActiveQuestion == nil {
+		tp.NewQuestion(ev.RoomID)
 	} else if tp.ActiveQuestion != nil {
 		tp.CheckAnswer(ev.RoomID, ev.Sender, ev.Content["body"].(string))
 	}
@@ -79,8 +86,11 @@ func (tp *TriviaPlugin) NewQuestion(roomID string) {
 		"answers": tp.ActiveQuestion.Answers,
 	}).Info("Serving trivia question")
 	tp.Client.SendText(roomID, tp.ActiveQuestion.Question)
-	tp.ActiveTimer = time.NewTimer(time.Second * 25)
+	tp.ActiveTimer = time.NewTimer(time.Second * 13)
 	go func() {
+		<-tp.ActiveTimer.C
+		tp.Client.SendText(roomID, "Hint: "+tp.HintActiveQuestion(0.25))
+		tp.ActiveTimer = time.NewTimer(time.Second * 13)
 		<-tp.ActiveTimer.C
 		tp.Client.SendText(roomID, "Time's up. Correct answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
 		log.Info("Question timed out.")
@@ -97,7 +107,7 @@ func (tp *TriviaPlugin) CheckAnswer(roomID string, sender string, answer string)
 				"message": answer,
 				"answers": tp.ActiveQuestion.Answers,
 			}).Info("Correct answer provided.")
-			tp.Client.SendText(roomID, sender+" is correct!")
+			tp.Client.SendText(roomID, sender+" is correct! Answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
 			tp.ActiveQuestion = nil
 		}
 	}
@@ -107,13 +117,15 @@ func (tp *TriviaPlugin) HintActiveQuestion(frac float64) string {
 	if tp.ActiveQuestion == nil {
 		return ""
 	}
-	answer := tp.ActiveQuestion.Answers[0]
-	hint := []byte(answer)
+	answer := []rune(tp.ActiveQuestion.Answers[0])
+	hint := make([]rune, len(answer))
 	num_letters := 0
 	for i, char := range answer {
-		if char != ' ' {
+		if unicode.IsLetter(char) {
 			hint[i] = '*'
 			num_letters += 1
+		} else {
+			hint[i] = char
 		}
 	}
 	perm := rand.Perm(len(answer))
@@ -123,10 +135,12 @@ func (tp *TriviaPlugin) HintActiveQuestion(frac float64) string {
 	}
 	hinted := 0
 	for _, i := range perm {
-		hint[i] = answer[i]
-		hinted += 1
-		if hinted >= num_to_hint {
-			break
+		if unicode.IsLetter(answer[i]) {
+		    hint[i] = answer[i]
+		    hinted += 1
+		    if hinted >= num_to_hint {
+			    break
+		    }
 		}
 	}
 	return string(hint)
