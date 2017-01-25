@@ -24,6 +24,7 @@ type Question struct {
 
 type TriviaPlugin struct {
 	Questions      []Question
+	QuestionOrder  []int
 	Client         *gomatrix.Client
 	ActiveQuestion *Question
 	ActiveTimer    *time.Timer
@@ -80,8 +81,17 @@ func (tp *TriviaPlugin) OnMessage(ev *gomatrix.Event) {
 	}
 }
 
+func (tp *TriviaPlugin) SampleQuestion() *Question {
+	if len(tp.QuestionOrder) == 0 {
+		tp.QuestionOrder = rand.Perm(len(tp.Questions))
+	}
+	i := tp.QuestionOrder[0]
+	tp.QuestionOrder = tp.QuestionOrder[1:]
+	return &tp.Questions[i]
+}
+
 func (tp *TriviaPlugin) NewQuestion(roomID string) {
-	tp.ActiveQuestion = &tp.Questions[rand.Intn(len(tp.Questions))]
+	tp.ActiveQuestion = tp.SampleQuestion()
 	log.WithFields(log.Fields{
 		"answers": tp.ActiveQuestion.Answers,
 	}).Info("Serving trivia question")
