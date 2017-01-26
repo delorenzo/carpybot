@@ -27,7 +27,9 @@ type TriviaPlugin struct {
 	QuestionOrder  []int
 	Client         *gomatrix.Client
 	ActiveQuestion *Question
-	ActiveTimer    *time.Timer
+	QuestionTimer  *time.Timer
+	CancelQuestion chan struct{}
+	NumToServe     int
 }
 
 var score_re = regexp.MustCompile(`\(\$([0-9]+)\)`)
@@ -96,21 +98,36 @@ func (tp *TriviaPlugin) NewQuestion(roomID string) {
 		"answers": tp.ActiveQuestion.Answers,
 	}).Info("Serving trivia question")
 	tp.Client.SendText(roomID, tp.ActiveQuestion.Question)
-	tp.ActiveTimer = time.NewTimer(time.Second * 13)
-	go func() {
-		<-tp.ActiveTimer.C
-		tp.Client.SendText(roomID, "Hint: "+tp.HintActiveQuestion(0.25))
-		tp.ActiveTimer = time.NewTimer(time.Second * 13)
-		<-tp.ActiveTimer.C
-		tp.Client.SendText(roomID, "Time's up. Correct answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
-		log.Info("Question timed out.")
-		tp.ActiveQuestion = nil
-	}()
+	hintTimer := time.NewTimer(time.Second * 15)
+	tp.QuestionTimer = time.NewTimer(time.Second * 30)
+	tp.CancelQuestion = make(chan struct{}, 2)
+	// hint timer
+	go func(hintTimer *time.Timer, cancelQuestion <-chan struct{}) {
+		select {
+		case <-hintTimer.C:
+			tp.Client.SendText(roomID, "Hint: "+tp.HintActiveQuestion(0.25))
+		case <-cancelQuestion:
+		}
+		log.Debug("Hint goroutine terminated.")
+	}(hintTimer, tp.CancelQuestion)
+	// question timer
+	go func(questionTimer *time.Timer, cancelQuestion <-chan struct{}) {
+		select {
+		case <-questionTimer.C:
+			tp.Client.SendText(roomID, "Time's up. Correct answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
+			log.Info("Question timed out.")
+			tp.ActiveQuestion = nil
+		case <-cancelQuestion:
+		}
+		log.Debug("Question goroutine terminated.")
+	}(tp.QuestionTimer, tp.CancelQuestion)
 }
 
 func (tp *TriviaPlugin) CheckAnswer(roomID string, sender string, answer string) {
 	if tp.ActiveQuestion != nil && stringInSlice(answer, tp.ActiveQuestion.Answers) {
-		if inTime := tp.ActiveTimer.Stop(); inTime {
+		if inTime := tp.QuestionTimer.Stop(); inTime {
+			tp.CancelQuestion <- struct{}{}
+			tp.CancelQuestion <- struct{}{}
 			log.WithFields(log.Fields{
 				"roomID":  roomID,
 				"sender":  sender,
@@ -146,11 +163,11 @@ func (tp *TriviaPlugin) HintActiveQuestion(frac float64) string {
 	hinted := 0
 	for _, i := range perm {
 		if unicode.IsLetter(answer[i]) {
-		    hint[i] = answer[i]
-		    hinted += 1
-		    if hinted >= num_to_hint {
-			    break
-		    }
+			hint[i] = answer[i]
+			hinted += 1
+			if hinted >= num_to_hint {
+				break
+			}
 		}
 	}
 	return string(hint)
