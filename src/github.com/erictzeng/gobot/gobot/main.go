@@ -15,6 +15,7 @@ type Config struct {
 	Homeserver  string
 	UserID      string
 	AccessToken string
+	Trivia      gobot.TriviaConfig `toml:"trivia"`
 }
 
 func init() {
@@ -41,7 +42,7 @@ func main() {
 			cli.SendText(ev.RoomID, "!pong")
 		}
 	})
-	triviaPlugin := gobot.NewTriviaPlugin()
+	triviaPlugin := gobot.NewTriviaPlugin(&conf.Trivia)
 	triviaPlugin.Register(cli)
 
 	for {

@@ -30,6 +30,13 @@ type TriviaPlugin struct {
 	QuestionTimer  *time.Timer
 	CancelQuestion chan struct{}
 	NumToServe     int
+	Config         *TriviaConfig
+}
+
+type TriviaConfig struct {
+	QuestionTime int
+	HintTime     int
+	HintFraction float64
 }
 
 var score_re = regexp.MustCompile(`\(\$([0-9]+)\)`)
@@ -98,14 +105,14 @@ func (tp *TriviaPlugin) NewQuestion(roomID string) {
 		"answers": tp.ActiveQuestion.Answers,
 	}).Info("Serving trivia question")
 	tp.Client.SendText(roomID, tp.ActiveQuestion.Question)
-	hintTimer := time.NewTimer(time.Second * 15)
-	tp.QuestionTimer = time.NewTimer(time.Second * 30)
+	hintTimer := time.NewTimer(time.Second * time.Duration(tp.Config.HintTime))
+	tp.QuestionTimer = time.NewTimer(time.Second * time.Duration(tp.Config.QuestionTime))
 	tp.CancelQuestion = make(chan struct{}, 2)
 	// hint timer
 	go func(hintTimer *time.Timer, cancelQuestion <-chan struct{}) {
 		select {
 		case <-hintTimer.C:
-			tp.Client.SendText(roomID, "Hint: "+tp.HintActiveQuestion(0.25))
+			tp.Client.SendText(roomID, "Hint: "+tp.HintActiveQuestion(tp.Config.HintFraction))
 		case <-cancelQuestion:
 		}
 		log.Debug("Hint goroutine terminated.")
@@ -173,7 +180,7 @@ func (tp *TriviaPlugin) HintActiveQuestion(frac float64) string {
 	return string(hint)
 }
 
-func NewTriviaPlugin() *TriviaPlugin {
+func NewTriviaPlugin(triviaConfig *TriviaConfig) *TriviaPlugin {
 	file, err := os.Open("jeopardy_s32.txt")
 	if err != nil {
 		panic(err)
@@ -184,5 +191,5 @@ func NewTriviaPlugin() *TriviaPlugin {
 	for scanner.Scan() {
 		questions = append(questions, parseQuestion(scanner.Text()))
 	}
-	return &TriviaPlugin{Questions: questions}
+	return &TriviaPlugin{Questions: questions, Config: triviaConfig}
 }

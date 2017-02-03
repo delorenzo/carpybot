@@ -1,3 +1,8 @@
 homeserver = "https://example.com"
 userid = "@example:example.com"
 accesstoken = ""
+
+[trivia]
+questiontime = 30
+hinttime = 15
+hintfraction = 0.25
