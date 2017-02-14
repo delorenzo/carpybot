@@ -155,7 +155,7 @@ func (tp *TriviaPlugin) HintActiveQuestion(frac float64) string {
 	hint := make([]rune, len(answer))
 	num_letters := 0
 	for i, char := range answer {
-		if unicode.IsLetter(char) {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) {
 			hint[i] = '*'
 			num_letters += 1
 		} else {
