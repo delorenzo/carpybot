@@ -31,6 +31,7 @@ type TriviaPlugin struct {
 	CancelQuestion chan struct{}
 	NumToServe     int
 	Config         *TriviaConfig
+	NumRemaining   int
 }
 
 type TriviaConfig struct {
@@ -40,6 +41,7 @@ type TriviaConfig struct {
 }
 
 var score_re = regexp.MustCompile(`\(\$([0-9]+)\)`)
+var message_re = regexp.MustCompile("^!trivia ([1-9][0-9]*)$")
 
 func round(f float64) int {
 	return int(math.Floor(f + .5))
@@ -83,10 +85,25 @@ func (tp *TriviaPlugin) Register(client *gomatrix.Client) {
 }
 
 func (tp *TriviaPlugin) OnMessage(ev *gomatrix.Event) {
-	if ev.Content["body"] == "!trivia" && tp.ActiveQuestion == nil {
-		tp.NewQuestion(ev.RoomID)
-	} else if tp.ActiveQuestion != nil {
+	if tp.ActiveQuestion != nil {
 		tp.CheckAnswer(ev.RoomID, ev.Sender, ev.Content["body"].(string))
+	} else if (ev.Content["body"] == "!trivia") {
+		tp.NumToServe = 1
+		tp.NumRemaining = tp.NumToServe
+		tp.NewQuestion(ev.RoomID)
+	} else {
+		matches := message_re.FindStringSubmatch(ev.Content["body"].(string))
+		if (matches != nil) {
+			num, err := strconv.Atoi(matches[1])
+			if err != nil {
+				log.Error("Error converting number requested:  " + matches[1])
+				return
+			}
+			tp.NumToServe = num
+			tp.NumRemaining = tp.NumToServe
+			log.WithFields(log.Fields{"count": num }).Info("Questions requested")
+			tp.NewQuestion(ev.RoomID)
+		}
 	}
 }
 
@@ -102,7 +119,7 @@ func (tp *TriviaPlugin) SampleQuestion() *Question {
 func (tp *TriviaPlugin) NewQuestion(roomID string) {
 	tp.ActiveQuestion = tp.SampleQuestion()
 	log.WithFields(log.Fields{
-		"answers": tp.ActiveQuestion.Answers,
+		"answers": tp.ActiveQuestion.Answers, "score": tp.ActiveQuestion.Score,
 	}).Info("Serving trivia question")
 	tp.Client.SendText(roomID, tp.ActiveQuestion.Question)
 	hintTimer := time.NewTimer(time.Second * time.Duration(tp.Config.HintTime))
@@ -123,11 +140,24 @@ func (tp *TriviaPlugin) NewQuestion(roomID string) {
 		case <-questionTimer.C:
 			tp.Client.SendText(roomID, "Time's up. Correct answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
 			log.Info("Question timed out.")
-			tp.ActiveQuestion = nil
+			tp.EndQuestion(roomID)
 		case <-cancelQuestion:
 		}
 		log.Debug("Question goroutine terminated.")
 	}(tp.QuestionTimer, tp.CancelQuestion)
+}
+
+func (tp *TriviaPlugin) RoundInProgress() bool {
+	return tp.NumRemaining > 0
+}
+
+func (tp *TriviaPlugin) EndQuestion(roomID string) {
+	tp.NumRemaining--
+	log.WithFields(log.Fields{"count": tp.NumRemaining}).Info("Questions remaining")
+	tp.ActiveQuestion = nil
+	if (tp.RoundInProgress()) {
+		tp.NewQuestion(roomID)
+	}
 }
 
 func (tp *TriviaPlugin) CheckAnswer(roomID string, sender string, answer string) {
@@ -142,7 +172,7 @@ func (tp *TriviaPlugin) CheckAnswer(roomID string, sender string, answer string)
 				"answers": tp.ActiveQuestion.Answers,
 			}).Info("Correct answer provided.")
 			tp.Client.SendText(roomID, sender+" is correct! Answers: "+strings.Join(tp.ActiveQuestion.Answers, ", "))
-			tp.ActiveQuestion = nil
+			tp.EndQuestion(roomID)
 		}
 	}
 }
